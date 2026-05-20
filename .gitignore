@@ -1,0 +1,23 @@
+# Compiled binary
+aero_queue
+aero_queue.exe
+
+# Build artefacts
+*.o
+*.out
+*.dSYM/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Valgrind output
+vgcore.*
+callgrind.out.*
+massif.out.*
