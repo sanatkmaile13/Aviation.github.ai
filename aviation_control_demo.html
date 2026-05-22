@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aviation Control — Runway Scheduler</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:         #040a0f;
+    --panel:      #070f16;
+    --border:     #0d2233;
+    --glow:       #00d4ff;
+    --glow2:      #00ff9d;
+    --warn:       #ff6b2b;
+    --danger:     #ff1744;
+    --gold:       #ffd600;
+    --muted:      #1a3a52;
+    --text:       #a8d4ec;
+    --text-dim:   #4a7a9b;
+    --p1:         #ff1744;
+    --p2:         #ff6b2b;
+    --p3:         #00d4ff;
+    --p4:         #9c27b0;
+    --font-mono:  'Share Tech Mono', monospace;
+    --font-hud:   'Orbitron', monospace;
+    --font-body:  'Rajdhani', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,212,255,0.015) 2px,
+      rgba(0,212,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Grid bg */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ─── HEADER ─── */
+  header {
+    position: relative;
+    z-index: 10;
+    padding: 20px 32px 16px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(0,212,255,0.05) 0%, transparent 100%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .logo-block { display: flex; align-items: center; gap: 16px; }
+
+  .plane-icon {
+    font-size: 36px;
+    animation: hover-plane 3s ease-in-out infinite;
+    filter: drop-shadow(0 0 12px var(--glow));
+  }
+  @keyframes hover-plane {
+    0%,100% { transform: translateY(0) rotate(-5deg); }
+    50%      { transform: translateY(-6px) rotate(5deg); }
+  }
+
+  .logo-text h1 {
+    font-family: var(--font-hud);
+    font-size: 22px;
+    font-weight: 900;
+    color: #fff;
+    letter-spacing: 3px;
+    text-shadow: 0 0 20px var(--glow);
+    text-transform: uppercase;
+  }
+  .logo-text p {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    margin-top: 2px;
+  }
+
+  .header-right {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .stat-badge {
+    text-align: center;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 4px;
+  }
+  .stat-badge .val {
+    font-family: var(--font-hud);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--glow);
+    display: block;
+  }
+  .stat-badge .lbl {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--glow2);
+    box-shadow: 0 0 12px var(--glow2);
+    animation: pulse 1.5s ease-in-out infinite;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; box-shadow: 0 0 12px var(--glow2); }
+    50%      { opacity: 0.4; box-shadow: 0 0 4px var(--glow2); }
+  }
+
+  /* ─── LAYOUT ─── */
+  .main {
+    position: relative; z-index: 10;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 0;
+    height: calc(100vh - 85px);
+  }
+
+  /* ─── LEFT PANEL ─── */
+  .control-panel {
+    border-right: 1px solid var(--border);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: rgba(4,10,15,0.8);
+  }
+
+  .panel-title {
+    font-family: var(--font-hud);
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .form-group input,
+  .form-group select {
+    background: var(--panel);
+    border: 1px solid var(--muted);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 3px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .form-group input:focus,
+  .form-group select:focus {
+    border-color: var(--glow);
+    box-shadow: 0 0 0 2px rgba(0,212,255,0.15);
+  }
+  .form-group select option { background: #0a1a26; }
+
+  .fuel-row { display: flex; align-items: center; gap: 10px; }
+  .fuel-row input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    background: var(--muted);
+    border: none;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  .fuel-row input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--glow);
+    box-shadow: 0 0 8px var(--glow);
+    cursor: pointer;
+  }
+  #fuel-display {
+    font-family: var(--font-hud);
+    font-size: 14px;
+    color: var(--glow2);
+    min-width: 38px;
+    text-align: right;
+  }
+
+  .btn {
+    padding: 10px 18px;
+    border: 1px solid;
+    font-family: var(--font-hud);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.2s;
+    background: transparent;
+  }
+  .btn-primary {
+    border-color: var(--glow);
+    color: var(--glow);
+  }
+  .btn-primary:hover {
+    background: var(--glow);
+    color: var(--bg);
+    box-shadow: 0 0 20px rgba(0,212,255,0.4);
+  }
+  .btn-danger {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .btn-danger:hover {
+    background: var(--danger);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(255,23,68,0.4);
+  }
+  .btn-success {
+    border-color: var(--glow2);
+    color: var(--glow2);
+    width: 100%;
+    padding: 12px;
+    font-size: 13px;
+  }
+  .btn-success:hover {
+    background: var(--glow2);
+    color: var(--bg);
+    box-shadow: 0 0 20px rgba(0,255,157,0.4);
+  }
+
+  .priority-pills {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .priority-pills button {
+    padding: 8px 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    background: var(--panel);
+    color: var(--text-dim);
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+  .priority-pills button.active { color: #fff; }
+  .priority-pills button[data-p="1"] { border-color: var(--p1); }
+  .priority-pills button[data-p="1"].active { background: var(--p1); box-shadow: 0 0 10px rgba(255,23,68,0.4); }
+  .priority-pills button[data-p="2"] { border-color: var(--p2); }
+  .priority-pills button[data-p="2"].active { background: var(--p2); box-shadow: 0 0 10px rgba(255,107,43,0.4); }
+  .priority-pills button[data-p="3"] { border-color: var(--p3); }
+  .priority-pills button[data-p="3"].active { background: var(--p3); color: var(--bg); box-shadow: 0 0 10px rgba(0,212,255,0.4); }
+  .priority-pills button[data-p="4"] { border-color: var(--p4); }
+  .priority-pills button[data-p="4"].active { background: var(--p4); box-shadow: 0 0 10px rgba(156,39,176,0.4); }
+
+  /* Quick actions */
+  .quick-actions { display: flex; gap: 8px; }
+  .quick-actions .btn { flex: 1; font-size: 10px; }
+
+  /* DSC info box */
+  .dsc-box {
+    background: rgba(0,212,255,0.04);
+    border: 1px solid rgba(0,212,255,0.15);
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .dsc-box .dsc-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--glow);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .dsc-box p {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-dim);
+  }
+  .dsc-box code {
+    background: rgba(0,0,0,0.4);
+    color: var(--glow2);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  /* ─── RIGHT PANEL: QUEUE DISPLAY ─── */
+  .queue-section {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .queue-header {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0,0,0,0.3);
+  }
+  .queue-header h2 {
+    font-family: var(--font-hud);
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--text);
+  }
+
+  .runway-visual {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,212,255,0.02);
+  }
+  .runway-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .runway-track {
+    height: 28px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--muted);
+    border-radius: 3px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+  .runway-stripe {
+    position: absolute;
+    top: 50%; transform: translateY(-50%);
+    height: 3px;
+    background: repeating-linear-gradient(
+      90deg,
+      var(--muted) 0px,
+      var(--muted) 20px,
+      transparent 20px,
+      transparent 40px
+    );
+    width: 100%;
+  }
+  .runway-plane {
+    position: absolute;
+    font-size: 20px;
+    transition: left 0.6s cubic-bezier(0.4,0,0.2,1);
+    filter: drop-shadow(0 0 8px var(--glow2));
+    z-index: 2;
+  }
+
+  /* Queue list */
+  .queue-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .queue-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    gap: 12px;
+    color: var(--text-dim);
+  }
+  .queue-empty .empty-icon { font-size: 48px; opacity: 0.3; }
+  .queue-empty p { font-family: var(--font-mono); font-size: 12px; letter-spacing: 2px; }
+
+  .flight-card {
+    display: grid;
+    grid-template-columns: 32px 90px 1fr 80px 90px 110px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid;
+    border-radius: 3px;
+    background: var(--panel);
+    transition: all 0.3s;
+    animation: slide-in 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateX(-20px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .flight-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .flight-card:hover::before { opacity: 1; }
+  .flight-card:hover { transform: translateX(4px); }
+
+  .flight-card[data-p="1"] { border-left-color: var(--p1); }
+  .flight-card[data-p="1"]::before { background: linear-gradient(90deg, rgba(255,23,68,0.06), transparent); }
+  .flight-card[data-p="2"] { border-left-color: var(--p2); }
+  .flight-card[data-p="2"]::before { background: linear-gradient(90deg, rgba(255,107,43,0.06), transparent); }
+  .flight-card[data-p="3"] { border-left-color: var(--p3); }
+  .flight-card[data-p="3"]::before { background: linear-gradient(90deg, rgba(0,212,255,0.06), transparent); }
+  .flight-card[data-p="4"] { border-left-color: var(--p4); }
+  .flight-card[data-p="4"]::before { background: linear-gradient(90deg, rgba(156,39,176,0.06), transparent); }
+
+  .flight-pos {
+    font-family: var(--font-hud);
+    font-size: 14px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .flight-pos.first { color: var(--gold); text-shadow: 0 0 8px var(--gold); }
+
+  .flight-id {
+    font-family: var(--font-hud);
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 1px;
+  }
+
+  .flight-airline {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .flight-type {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    letter-spacing: 1px;
+  }
+  .flight-type.land    { background: rgba(0,255,157,0.1); color: var(--glow2); border: 1px solid rgba(0,255,157,0.3); }
+  .flight-type.takeoff { background: rgba(255,214,0,0.1); color: var(--gold);  border: 1px solid rgba(255,214,0,0.3); }
+
+  .fuel-bar-wrap { position: relative; }
+  .fuel-bar-bg {
+    height: 6px;
+    background: var(--muted);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+  .fuel-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s;
+  }
+  .fuel-val {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .priority-badge {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    font-weight: 600;
+  }
+
+  /* ─── LOG PANEL ─── */
+  .log-panel {
+    border-top: 1px solid var(--border);
+    padding: 10px 24px;
+    max-height: 120px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.4);
+  }
+  .log-entry {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 0;
+    color: var(--text-dim);
+    animation: fade-in 0.3s ease;
+    display: flex;
+    gap: 12px;
+  }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .log-time { color: var(--muted); min-width: 60px; }
+  .log-entry.info  .log-msg { color: var(--glow); }
+  .log-entry.warn  .log-msg { color: var(--warn); }
+  .log-entry.error .log-msg { color: var(--danger); }
+  .log-entry.ok    .log-msg { color: var(--glow2); }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
+
+  /* ─── TOAST ─── */
+  #toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    padding: 12px 20px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 1px;
+    z-index: 9999;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+    pointer-events: none;
+    border-left: 3px solid;
+    background: rgba(4,10,15,0.95);
+    backdrop-filter: blur(10px);
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.ok    { border-color: var(--glow2); color: var(--glow2); }
+  #toast.warn  { border-color: var(--warn);  color: var(--warn); }
+  #toast.error { border-color: var(--danger); color: var(--danger); }
+
+  /* ─── PRIORITY KEY ─── */
+  .priority-key {
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .key-item {
+    display: flex; align-items: center; gap: 5px;
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-dim);
+  }
+  .key-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* ─── RESPONSIVE ─── */
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; height: auto; }
+    .flight-card { grid-template-columns: 24px 80px 1fr 70px; }
+    .flight-type, .priority-badge { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo-block">
+    <div class="plane-icon">✈</div>
+    <div class="logo-text">
+      <h1>Aviation Control</h1>
+      <p><span class="status-dot"></span> RUNWAY SCHEDULER · PRIORITY QUEUE · DSC PROJECT</p>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="stat-badge">
+      <span class="val" id="queue-count">0</span>
+      <span class="lbl">In Queue</span>
+    </div>
+    <div class="stat-badge">
+      <span class="val" id="served-count">0</span>
+      <span class="lbl">Served</span>
+    </div>
+    <div class="stat-badge">
+      <span class="val" id="runway-status" style="color: var(--glow2);">OPEN</span>
+      <span class="lbl">Runway</span>
+    </div>
+  </div>
+</header>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT: CONTROL PANEL -->
+  <div class="control-panel">
+
+    <div class="panel-title">▶ Flight Request</div>
+
+    <div class="form-group">
+      <label>Flight ID</label>
+      <input id="inp-id" type="text" placeholder="e.g. AI-202" maxlength="9">
+    </div>
+
+    <div class="form-group">
+      <label>Airline / Operator</label>
+      <input id="inp-airline" type="text" placeholder="e.g. Air India">
+    </div>
+
+    <div class="form-group">
+      <label>Operation</label>
+      <select id="inp-type">
+        <option value="LAND">LAND</option>
+        <option value="TAKEOFF">TAKEOFF</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Priority Level</label>
+      <div class="priority-pills">
+        <button data-p="1" onclick="selectPriority(1)">🚨 Emergency</button>
+        <button data-p="2" onclick="selectPriority(2)">🌐 International</button>
+        <button data-p="3" onclick="selectPriority(3)">🏠 Domestic</button>
+        <button data-p="4" onclick="selectPriority(4)">💼 Private Jet</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Fuel Level</label>
+      <div class="fuel-row">
+        <input type="range" id="fuel-slider" min="1" max="100" value="75"
+               oninput="document.getElementById('fuel-display').textContent = this.value + '%'">
+        <span id="fuel-display">75%</span>
+      </div>
+    </div>
+
+    <button class="btn btn-success" onclick="addFlight()">⊕ REQUEST RUNWAY ACCESS</button>
+
+    <div class="panel-title" style="margin-top: 8px;">▶ Control Actions</div>
+
+    <div class="quick-actions">
+      <button class="btn btn-danger" onclick="serveNext()">▶ GRANT RUNWAY</button>
+      <button class="btn btn-primary" onclick="loadDemo()">⚡ LOAD DEMO</button>
+    </div>
+
+    <div class="dsc-box">
+      <div class="dsc-title">◉ DSC Concept</div>
+      <p>
+        <code>Linked List Priority Queue</code><br><br>
+        Each flight is a <code>struct</code> node with a <code>next</code> pointer.
+        Insertion uses sorted position by <code>priority_number</code>. Dequeue
+        removes from the <code>head</code> — O(1) serve, O(n) insert.
+      </p>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: QUEUE DISPLAY -->
+  <div class="queue-section">
+
+    <div class="queue-header">
+      <h2>◈ LIVE RUNWAY QUEUE</h2>
+      <div class="priority-key">
+        <div class="key-item"><div class="key-dot" style="background:var(--p1)"></div> Emergency</div>
+        <div class="key-item"><div class="key-dot" style="background:var(--p2)"></div> International</div>
+        <div class="key-item"><div class="key-dot" style="background:var(--p3)"></div> Domestic</div>
+        <div class="key-item"><div class="key-dot" style="background:var(--p4)"></div> Private</div>
+      </div>
+    </div>
+
+    <!-- RUNWAY VISUAL -->
+    <div class="runway-visual">
+      <div class="runway-label">RUNWAY 27L/09R ─ SIMULATION</div>
+      <div class="runway-track">
+        <div class="runway-stripe"></div>
+        <div class="runway-plane" id="runway-plane" style="left: -40px;">✈</div>
+      </div>
+    </div>
+
+    <!-- TABLE HEADER -->
+    <div style="padding: 8px 24px 4px; display: grid; grid-template-columns: 32px 90px 1fr 80px 90px 110px; gap: 12px;">
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px;">#</span>
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px;">FLIGHT</span>
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px;">AIRLINE</span>
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px; text-align:center;">OP</span>
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px;">FUEL</span>
+      <span style="font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 1px; text-align:right;">PRIORITY</span>
+    </div>
+
+    <!-- QUEUE LIST -->
+    <div class="queue-list" id="queue-list">
+      <div class="queue-empty">
+        <div class="empty-icon">🛫</div>
+        <p>QUEUE EMPTY — RUNWAY CLEAR</p>
+      </div>
+    </div>
+
+    <!-- LOG -->
+    <div class="log-panel" id="log-panel"></div>
+
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+/* ─────────────────────────────────────
+   DATA STRUCTURE: Priority Queue
+   implemented as sorted JS array
+   (mirrors the C linked list logic)
+───────────────────────────────────── */
+let queue    = [];   // Array acting as linked list (sorted by priority)
+let served   = 0;
+let selectedPriority = null;
+
+const PRIORITY_LABELS = {
+  1: 'EMERGENCY',
+  2: 'INTERNATIONAL',
+  3: 'DOMESTIC',
+  4: 'PRIVATE JET'
+};
+const PRIORITY_COLORS = {
+  1: 'var(--p1)',
+  2: 'var(--p2)',
+  3: 'var(--p3)',
+  4: 'var(--p4)'
+};
+
+/* ─── SELECT PRIORITY ─── */
+function selectPriority(p) {
+  selectedPriority = p;
+  document.querySelectorAll('.priority-pills button').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.p) === p);
+  });
+}
+
+/* ─── ENQUEUE (Sorted Insertion — mirrors C linked list) ─── */
+function enqueue(id, airline, type, priority, fuel) {
+  const flight = { id, airline, type, priority, fuel };
+  // Find insertion index (sorted ascending by priority)
+  let i = 0;
+  while (i < queue.length && queue[i].priority <= priority) i++;
+  queue.splice(i, 0, flight);
+
+  updateUI();
+  log(`QUEUED: ${id} | ${airline} | P${priority} (${PRIORITY_LABELS[priority]}) | Fuel: ${fuel}%`,
+      priority === 1 ? 'warn' : 'info');
+  toast(`✈ ${id} added to queue`, priority === 1 ? 'warn' : 'ok');
+  animateRunwayApproach();
+}
+
+/* ─── DEQUEUE (Remove head — highest priority) ─── */
+function serveNext() {
+  if (queue.length === 0) {
+    log('Runway clear. No flights in queue.', 'info');
+    toast('Queue is empty', 'error');
+    return;
+  }
+  const served_flight = queue.shift();
+  served++;
+  updateUI();
+  log(`RUNWAY GRANTED: ${served_flight.id} | ${served_flight.airline} | ${served_flight.type} | ${PRIORITY_LABELS[served_flight.priority]}`, 'ok');
+  toast(`🛬 ${served_flight.id} — Runway Granted!`, 'ok');
+  animateRunwayServe();
+}
+
+/* ─── ADD FROM FORM ─── */
+function addFlight() {
+  const id      = document.getElementById('inp-id').value.trim().toUpperCase();
+  const airline = document.getElementById('inp-airline').value.trim();
+  const type    = document.getElementById('inp-type').value;
+  const fuel    = parseInt(document.getElementById('fuel-slider').value);
+
+  if (!id)            { toast('Enter a Flight ID', 'error'); return; }
+  if (!airline)       { toast('Enter Airline name', 'error'); return; }
+  if (!selectedPriority) { toast('Select a Priority level', 'error'); return; }
+  if (queue.find(f => f.id === id)) { toast(`${id} already in queue`, 'error'); return; }
+
+  enqueue(id, airline, type, selectedPriority, fuel);
+
+  // Reset form
+  document.getElementById('inp-id').value = '';
+  document.getElementById('inp-airline').value = '';
+}
+
+/* ─── DEMO DATA ─── */
+function loadDemo() {
+  queue = [];
+  const demo = [
+    { id: '6E-401', airline: 'IndiGo',       type: 'LAND',    priority: 3, fuel: 78 },
+    { id: '9W-707', airline: 'Jet Airways',  type: 'TAKEOFF', priority: 2, fuel: 62 },
+    { id: 'VT-PJT', airline: 'Private Jet',  type: 'LAND',    priority: 4, fuel: 90 },
+    { id: 'AI-SOS', airline: 'Air India',    type: 'LAND',    priority: 1, fuel: 8  },
+    { id: 'EK-521', airline: 'Emirates',     type: 'LAND',    priority: 2, fuel: 45 },
+    { id: 'SG-303', airline: 'SpiceJet',     type: 'TAKEOFF', priority: 3, fuel: 85 },
+    { id: 'UK-837', airline: 'Vistara',      type: 'LAND',    priority: 2, fuel: 55 },
+  ];
+  // Insert each one (re-runs the sorting logic)
+  demo.forEach(f => {
+    let i = 0;
+    while (i < queue.length && queue[i].priority <= f.priority) i++;
+    queue.splice(i, 0, f);
+  });
+  updateUI();
+  log('Demo scenario loaded — 7 flights queued', 'info');
+  toast('Demo loaded! AI-SOS (Emergency) is first.', 'ok');
+}
+
+/* ─── UPDATE UI ─── */
+function updateUI() {
+  document.getElementById('queue-count').textContent = queue.length;
+  document.getElementById('served-count').textContent = served;
+  document.getElementById('runway-status').textContent = queue.length > 0 ? 'BUSY' : 'OPEN';
+  document.getElementById('runway-status').style.color = queue.length > 0 ? 'var(--warn)' : 'var(--glow2)';
+
+  renderQueue();
+}
+
+function renderQueue() {
+  const list = document.getElementById('queue-list');
+
+  if (queue.length === 0) {
+    list.innerHTML = `<div class="queue-empty">
+      <div class="empty-icon">🛫</div>
+      <p>QUEUE EMPTY — RUNWAY CLEAR</p>
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = queue.map((f, i) => {
+    const fuelColor = f.fuel < 15 ? 'var(--danger)'
+                    : f.fuel < 40 ? 'var(--warn)'
+                    : 'var(--glow2)';
+    const typeClass = f.type === 'LAND' ? 'land' : 'takeoff';
+
+    return `<div class="flight-card" data-p="${f.priority}">
+      <div class="flight-pos ${i === 0 ? 'first' : ''}">${i + 1}</div>
+      <div class="flight-id">${f.id}</div>
+      <div class="flight-airline">${f.airline}</div>
+      <div>
+        <span class="flight-type ${typeClass}">${f.type === 'LAND' ? '↓ LAND' : '↑ TKOF'}</span>
+      </div>
+      <div class="fuel-bar-wrap">
+        <div class="fuel-bar-bg">
+          <div class="fuel-bar-fill" style="width:${f.fuel}%; background:${fuelColor};"></div>
+        </div>
+        <div class="fuel-val">${f.fuel}%</div>
+      </div>
+      <div>
+        <span class="priority-badge" style="background: rgba(0,0,0,0.5); border: 1px solid ${PRIORITY_COLORS[f.priority]}; color: ${PRIORITY_COLORS[f.priority]}">
+          P${f.priority} · ${PRIORITY_LABELS[f.priority]}
+        </span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ─── LOG ─── */
+function log(msg, type = 'info') {
+  const panel = document.getElementById('log-panel');
+  const now   = new Date();
+  const time  = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const el    = document.createElement('div');
+  el.className = `log-entry ${type}`;
+  el.innerHTML = `<span class="log-time">${time}</span><span class="log-msg">${msg}</span>`;
+  panel.prepend(el);
+  // Keep last 30 entries
+  while (panel.children.length > 30) panel.removeChild(panel.lastChild);
+}
+
+/* ─── TOAST ─── */
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  setTimeout(() => { el.className = type; }, 3000);
+}
+
+/* ─── RUNWAY ANIMATION ─── */
+function animateRunwayApproach() {
+  const plane = document.getElementById('runway-plane');
+  plane.style.left = '110%';
+  plane.style.transition = 'none';
+  setTimeout(() => {
+    plane.style.transition = 'left 1.5s ease-out';
+    plane.style.left = '60%';
+  }, 50);
+}
+
+function animateRunwayServe() {
+  const plane = document.getElementById('runway-plane');
+  plane.style.transition = 'left 0.8s ease-in';
+  plane.style.left = '-60px';
+  setTimeout(() => {
+    plane.style.transition = 'none';
+    plane.style.left = '110%';
+  }, 1000);
+}
+
+/* ─── KEYBOARD SHORTCUT ─── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement.tagName !== 'BUTTON') addFlight();
+});
+
+/* ─── INIT ─── */
+log('Aviation Control System initialized', 'ok');
+log('Priority Queue (Linked List) ready', 'info');
+updateUI();
+</script>
+</body>
+</html>
